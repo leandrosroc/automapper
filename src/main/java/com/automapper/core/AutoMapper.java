@@ -1,9 +1,13 @@
 package com.automapper.core;
 
+import com.automapper.annotations.*;
+import com.automapper.validation.TypeValidator;
+import com.automapper.validation.ValidationResult;
 import java.lang.reflect.Field;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public class AutoMapper<TSource, TTarget> {
@@ -11,6 +15,8 @@ public class AutoMapper<TSource, TTarget> {
     private final Class<TTarget> targetClass;
     private final Map<String, String> customMappings = new HashMap<>();
     private final Map<String, TypeConverter<Object, Object>> typeConverters = new HashMap<>();
+    private final Set<String> ignoredFields = new HashSet<>();
+    private final Map<String, Function<Object, Object>> lambdaConverters = new HashMap<>();
     
     private static final Map<String, AutoMapper<?, ?>> mapperCache = new HashMap<>();
     private static final DateTimeFormatter DEFAULT_DATE_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
@@ -22,13 +28,101 @@ public class AutoMapper<TSource, TTarget> {
             k -> new AutoMapper<>(sourceClass, targetClass));
     }
 
+    /**
+     * Cria um mapper bidirecional
+     */
+    public static <S, T> BidirectionalMapper<S, T> createBidirectional(Class<S> firstClass, Class<T> secondClass) {
+        return new BidirectionalMapper<>(firstClass, secondClass);
+    }
+
+    /**
+     * Valida a compatibilidade entre os tipos
+     */
+    public static <S, T> ValidationResult validate(Class<S> sourceClass, Class<T> targetClass) {
+        return TypeValidator.validate(sourceClass, targetClass);
+    }
+
     private AutoMapper(Class<TSource> sourceClass, Class<TTarget> targetClass) {
         this.sourceClass = sourceClass;
         this.targetClass = targetClass;
+        processAnnotations();
+    }
+
+    /**
+     * Processa as anotações das classes para configuração automática
+     */
+    private void processAnnotations() {
+        // Processa anotações da classe fonte
+        Field[] sourceFields = getAllFields(sourceClass);
+        
+        for (Field field : sourceFields) {
+            // Processa anotação @Ignore
+            if (field.isAnnotationPresent(Ignore.class)) {
+                ignoredFields.add(field.getName());
+            }
+            
+            // Processa anotação @MapTo
+            if (field.isAnnotationPresent(MapTo.class)) {
+                MapTo mapTo = field.getAnnotation(MapTo.class);
+                customMappings.put(field.getName(), mapTo.value());
+            }
+            
+            // Processa anotação @UseConverter
+            if (field.isAnnotationPresent(UseConverter.class)) {
+                UseConverter useConverter = field.getAnnotation(UseConverter.class);
+                try {
+                    Object converterInstance = useConverter.value().getDeclaredConstructor().newInstance();
+                    if (converterInstance instanceof TypeConverter) {
+                        @SuppressWarnings("unchecked")
+                        TypeConverter<Object, Object> converter = (TypeConverter<Object, Object>) converterInstance;
+                        typeConverters.put(field.getName(), converter);
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException("Error creating converter for field " + field.getName(), e);
+                }
+            }
+        }
+        
+        // Processa anotações da classe alvo para criar mapeamentos reversos
+        Field[] targetFields = getAllFields(targetClass);
+        
+        for (Field field : targetFields) {
+            // Processa anotação @MapTo no alvo para criar mapeamento reverso
+            if (field.isAnnotationPresent(MapTo.class)) {
+                MapTo mapTo = field.getAnnotation(MapTo.class);
+                // Cria mapeamento reverso: campo_fonte -> campo_alvo
+                customMappings.put(mapTo.value(), field.getName());
+            }
+        }
     }
 
     public AutoMapper<TSource, TTarget> configureMapping(Map<String, String> customMappings) {
         this.customMappings.putAll(customMappings);
+        return this;
+    }
+
+    /**
+     * Configura mapeamento usando expressão lambda
+     */
+    public AutoMapper<TSource, TTarget> configure(MappingExpression<TSource, TTarget> expression) {
+        MappingConfiguration<TSource, TTarget> config = new MappingConfiguration<>(this);
+        expression.configure(config);
+        return this;
+    }
+
+    /**
+     * Ignora um campo específico
+     */
+    public AutoMapper<TSource, TTarget> ignoreField(String fieldName) {
+        ignoredFields.add(fieldName);
+        return this;
+    }
+
+    /**
+     * Adiciona um conversor lambda
+     */
+    public AutoMapper<TSource, TTarget> addLambdaConverter(String fieldName, Function<Object, Object> converter) {
+        lambdaConverters.put(fieldName, converter);
         return this;
     }
 
@@ -53,6 +147,12 @@ public class AutoMapper<TSource, TTarget> {
 
             for (Field sourceField : sourceFields) {
                 sourceField.setAccessible(true);
+                
+                // Verifica se o campo deve ser ignorado
+                if (ignoredFields.contains(sourceField.getName())) {
+                    continue;
+                }
+                
                 Object sourceValue = sourceField.get(source);
                 
                 if (sourceValue == null) {
@@ -77,7 +177,12 @@ public class AutoMapper<TSource, TTarget> {
     }
 
     private Object mapValue(Field sourceField, Field targetField, Object sourceValue) {
-        // 1. Verifica conversor de tipo customizado
+        // 1. Verifica conversor lambda primeiro (tem prioridade mais alta)
+        if (lambdaConverters.containsKey(sourceField.getName())) {
+            return lambdaConverters.get(sourceField.getName()).apply(sourceValue);
+        }
+        
+        // 2. Verifica conversor de tipo customizado (anotações)
         if (typeConverters.containsKey(sourceField.getName())) {
             return typeConverters.get(sourceField.getName()).apply(sourceValue);
         }
@@ -85,32 +190,46 @@ public class AutoMapper<TSource, TTarget> {
         Class<?> sourceType = sourceField.getType();
         Class<?> targetType = targetField.getType();
 
-        // 2. Tipos idênticos
+        // 3. Tipos idênticos
         if (sourceType.equals(targetType)) {
             return sourceValue;
         }
 
-        // 3. Conversões automáticas de tipos primitivos
+        // 4. Conversões automáticas de tipos primitivos
         if (isConvertiblePrimitive(sourceType, targetType)) {
             return convertPrimitive(sourceValue, targetType);
         }
 
-        // 4. Conversão de data para string
+        // 5. Conversão de data para string
         if (sourceType.equals(LocalDate.class) && targetType.equals(String.class)) {
             return ((LocalDate) sourceValue).format(DEFAULT_DATE_FORMAT);
         }
+        
+        // 6. Conversão de string para data (formato dd/MM/yyyy)
+        if (sourceType.equals(String.class) && targetType.equals(LocalDate.class)) {
+            try {
+                return LocalDate.parse((String) sourceValue, DEFAULT_DATE_FORMAT);
+            } catch (Exception e) {
+                // Se falhar, tenta outros formatos comuns
+                try {
+                    return LocalDate.parse((String) sourceValue);
+                } catch (Exception ex) {
+                    throw new RuntimeException("Cannot convert string '" + sourceValue + "' to LocalDate", ex);
+                }
+            }
+        }
 
-        // 5. Coleções
+        // 7. Coleções
         if (isCollectionType(sourceType) && isCollectionType(targetType)) {
             return mapCollection(sourceValue, targetType);
         }
 
-        // 6. Objetos complexos (mapeamento recursivo)
+        // 8. Objetos complexos (mapeamento recursivo)
         if (!isSimpleType(sourceType) && !isSimpleType(targetType)) {
             return mapComplexObject(sourceValue, sourceType, targetType);
         }
 
-        // 7. Fallback - tenta conversão direta
+        // 9. Fallback - tenta conversão direta
         try {
             if (targetType.isAssignableFrom(sourceType)) {
                 return sourceValue;

@@ -1,13 +1,22 @@
 package com.automapper.dto;
 
+import com.automapper.annotations.*;
+import com.automapper.examples.NomeConverter;
 import java.time.LocalDate;
 import java.util.List;
 
+@AutoMappable(profile = "pessoa")
 public class PessoaDto {
+    @UseConverter(NomeConverter.class)
     private String nomeCompleto;
+    
+    @MapTo("dataNascimento")
     private LocalDate dtNascimento;
+    
     private EnderecoDto endereco;
     private List<String> telefones;
+    
+    @Ignore
     private double score;
 
     public PessoaDto() {}

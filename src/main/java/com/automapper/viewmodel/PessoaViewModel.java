@@ -1,9 +1,13 @@
 package com.automapper.viewmodel;
 
+import com.automapper.annotations.*;
 import java.util.Collection;
 
+@AutoMappable(profile = "pessoa")
 public class PessoaViewModel {
+    @MapTo("nomeCompleto")
     private String nome;
+    
     private String dataNascimento; // Tipo diferente (String)
     private EnderecoViewModel endereco;
     private Collection<String> telefones; // Tipo diferente (Collection)

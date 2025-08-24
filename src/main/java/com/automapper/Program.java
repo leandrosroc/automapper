@@ -1,49 +1,61 @@
 package com.automapper;
 
-import com.automapper.core.AutoMapper;
-import com.automapper.dto.EnderecoDto;
-import com.automapper.dto.PessoaDto;
-import com.automapper.viewmodel.PessoaViewModel;
-
+import com.automapper.core.*;
+import com.automapper.dto.*;
+import com.automapper.viewmodel.*;
+import com.automapper.examples.*;
+import com.automapper.validation.ValidationResult;
 import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
 
 public class Program {
     public static void main(String[] args) {
-        // 1 - Configurar os mapeamentos customizados
-        Map<String, String> customMappings = new HashMap<>();
-        customMappings.put("nomeCompleto", "nome"); // Mapeia nomeCompleto para nome
-        customMappings.put("dtNascimento", "dataNascimento"); // Mapeia dtNascimento para dataNascimento
+        System.out.println("=== AutoMapper Java - Funcionalidades Avançadas ===\n");
         
+        // Demonstra todas as funcionalidades
+        ExemploCompleto.main(args);
+        
+        // Exemplo adicional com validação
+        demonstrarValidacaoDetalhada();
+    }
+    
+    private static void demonstrarValidacaoDetalhada() {
+        System.out.println("=== VALIDAÇÃO DETALHADA ===");
+        
+        // Valida mapeamento entre tipos
+        ValidationResult resultado = AutoMapper.validate(PessoaDto.class, PessoaViewModel.class);
+        
+        System.out.println("Resultado da validação:");
+        System.out.println(resultado);
+        
+        // Demonstra mapeamento com configuração completa
         AutoMapper<PessoaDto, PessoaViewModel> mapper = AutoMapper
             .create(PessoaDto.class, PessoaViewModel.class)
-            .configureMapping(customMappings);
-
-        // 2 - Adicionar conversor de tipo para a data
-        mapper.addTypeConverter("dtNascimento", 
-            obj -> ((LocalDate) obj).format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
-
-        // 3 - Criar objeto de origem com dados complexos
-        PessoaDto dto = new PessoaDto();
-        dto.setNomeCompleto("Leandro Rocha");
-        dto.setDtNascimento(LocalDate.of(1999, 9, 22));
-        dto.setEndereco(new EnderecoDto("Rua Hello World", 123));
-        dto.setTelefones(Arrays.asList("79-1234-1234", "79-4321-4321"));
-        dto.setScore(98.5);
-
-        // 4 - Executar o mapeamento
-        PessoaViewModel viewModel = mapper.map(dto);
-
-        // 5 - Exibir resultados
-        System.out.println("Mapeamento concluído:");
-        System.out.println("Nome: " + viewModel.getNome());
-        System.out.println("Data Nascimento: " + viewModel.getDataNascimento());
-        System.out.println("Endereço: " + viewModel.getEndereco().getLogradouro() + 
-                          ", " + viewModel.getEndereco().getNumero());
-        System.out.println("Telefones: " + String.join(", ", viewModel.getTelefones()));
-        System.out.println("Score: " + viewModel.getScore());
+            .configure(config -> {
+                System.out.println("Aplicando configurações personalizadas...");
+            })
+            .addLambdaConverter("nomeCompleto", nome -> 
+                "Sr(a). " + nome.toString().trim())
+            .ignoreField("score");
+        
+        // Teste com dados reais
+        EnderecoDto endereco = new EnderecoDto("Av. Paulista", 1000);
+        PessoaDto pessoa = new PessoaDto(
+            "Leandro Santos Rocha",
+            LocalDate.of(1999, 9, 22),
+            endereco,
+            Arrays.asList("11987654321", "1134567890"),
+            87.5
+        );
+        
+        PessoaViewModel resultado2 = mapper.map(pessoa);
+        
+        System.out.println("\nResultado do mapeamento:");
+        System.out.println("Nome original: " + pessoa.getNomeCompleto());
+        System.out.println("Nome mapeado: " + resultado2.getNome());
+        System.out.println("Data: " + resultado2.getDataNascimento());
+        System.out.println("Telefones: " + resultado2.getTelefones());
+        
+        System.out.println("\n=== FIM DOS EXEMPLOS ===");
     }
 }
